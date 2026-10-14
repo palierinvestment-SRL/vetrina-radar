@@ -8,7 +8,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;500;600;700&display=swap">
-<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 /* Layout: colonna unica centrata; accesso in una card, poi strumento. Carta calda, inchiostro scuro, un accento arancio */
 :root{
@@ -126,209 +125,76 @@ form.kwf input{flex:1 1 240px;min-width:0;height:44px;border:1px solid var(--lin
 <script>
 (function(){
 "use strict";
-/* Configurazione: il client ID di Google è pubblico per natura (sta in ogni pagina con "Accedi con Google") */
-const CONFIG = {
-  clientId: "",
-  endpoint: "https://hlouydfsefgvzxdqgvbj.supabase.co/functions/v1/radar-public",
-  maxKeywords: 5
-};
+const ENDPOINT = "https://hlouydfsefgvzxdqgvbj.supabase.co/functions/v1/radar-scrape";
+const MAXK = 5, KEY = "vetrina-scraper";
 const SUGGEST = ["panificio","pasticceria","ristorante","pizzeria","parrucchiere","estetista","palestra","agenzia immobiliare","bar caffetteria","fioraio"];
-const S = {token:null, user:null, keywords:[], data:null, loading:false, err:null, gisReady:false, expired:false, fetchedAt:null};
-const KEY = "vetrina-radar";
-
-function save(){ try { sessionStorage.setItem(KEY, JSON.stringify({token:S.token, keywords:S.keywords, data:S.data, fetchedAt:S.fetchedAt})); } catch(e){} }
-function restore(){ try { const o = JSON.parse(sessionStorage.getItem(KEY) || "null"); if (o){ S.token = o.token || null; S.keywords = Array.isArray(o.keywords) ? o.keywords : []; S.data = o.data || null; S.fetchedAt = o.fetchedAt || null; } } catch(e){} }
-function wipe(){ try { sessionStorage.removeItem(KEY); } catch(e){} }
-
+const S = {keywords:[], data:null, loading:false, err:null};
+try { const o = JSON.parse(sessionStorage.getItem(KEY) || "null"); if (o){ S.keywords = o.keywords || []; S.data = o.data || null; } } catch(e){}
+const save = () => { try { sessionStorage.setItem(KEY, JSON.stringify({keywords:S.keywords, data:S.data})); } catch(e){} };
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const safeUrl = u => { try { const x = new URL(u); return (x.protocol === "https:" || x.protocol === "http:") ? x.href : null; } catch(e){ return null; } };
-const nf = new Intl.NumberFormat("it-IT");
-const fmtN = n => n == null ? "—" : nf.format(Math.round(n));
-const hm = d => { const x = new Date(d); return isNaN(+x) ? "—" : x.toLocaleTimeString("it-IT", {hour:"2-digit", minute:"2-digit"}); };
-function ago(d){ const x = new Date(d); if (isNaN(+x)) return "—"; const m = Math.round((Date.now()-x)/60000); if (m < 1) return "adesso"; if (m < 60) return m + " min fa"; const h = Math.round(m/60); return h < 24 ? h + " h fa" : Math.round(h/24) + " g fa"; }
-function since(d){ const x = new Date(d); if (isNaN(+x)) return ""; const m = Math.round((Date.now()-x)/60000); if (m < 60) return "da " + Math.max(m,1) + " min"; return "da " + Math.floor(m/60) + " h"; }
-function nextRun(){ const d = new Date(); d.setMinutes(7,0,0); if (d <= new Date()) d.setHours(d.getHours()+1); return d; }
-function claims(t){ try { const p = t.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"); return JSON.parse(decodeURIComponent(atob(p).split("").map(c => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2)).join(""))); } catch(e){ return null; } }
-function tokenValid(){ const c = S.token && claims(S.token); return !!(c && c.exp * 1000 > Date.now() + 30000); }
-function spark(values){
-  if (!values || values.length < 2) return "";
-  const w = 96, h = 28, mn = Math.min(...values), mx = Math.max(...values), n = values.length;
-  const pts = values.map((v,i) => (2+i*(w-4)/(n-1)).toFixed(1) + "," + (h-3-(mx===mn?0.5:(v-mn)/(mx-mn))*(h-6)).toFixed(1)).join(" ");
-  return '<svg width="96" height="28" viewBox="0 0 96 28" aria-hidden="true"><polyline fill="none" style="stroke:var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="' + pts + '"/></svg>';
-}
-const I = {
-  refresh:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>',
-  x:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
-  alert:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v.5"/></svg>',
-  check:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>',
-  play:'<svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="#FFFFFF" d="M8 5l11 7-11 7z"/></svg>'
-};
+const safe = u => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : null; } catch(e){ return null; } };
+const nf = new Intl.NumberFormat("it-IT"), fmt = n => n == null ? "—" : nf.format(Math.round(n));
+const hm = d => { const x = new Date(d); return isNaN(+x) ? "—" : x.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"}); };
+const ago = d => { const x = new Date(d); if (isNaN(+x)) return ""; const m = Math.round((Date.now()-x)/60000); if (m < 60) return Math.max(m,1)+" min fa"; const h = Math.round(m/60); return h < 24 ? h+" h fa" : Math.round(h/24)+" g fa"; };
 const LOGO = '<span class="logo"><svg width="21" height="21" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16l-1.6-4H5.6z" fill="#EB6834"/><path d="M4 9a2 2 0 0 0 4 0a2 2 0 0 0 4 0a2 2 0 0 0 4 0a2 2 0 0 0 4 0z" fill="#EB6834"/><rect x="6.5" y="13.5" width="11" height="6.5" rx="1" fill="none" stroke="#FFFFFF" stroke-width="1.6"/></svg></span>';
+const X = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 
-/* ---------- Google ---------- */
-function initGoogle(){
-  if (!window.google || !google.accounts || !google.accounts.id){ setTimeout(initGoogle, 200); return; }
-  if (!CONFIG.clientId){ S.gisReady = false; render(); return; }
-  google.accounts.id.initialize({client_id: CONFIG.clientId, callback: onCredential, auto_select: false, cancel_on_tap_outside: true, itp_support: true, use_fedcm_for_prompt: true});
-  S.gisReady = true; render();
-}
-function drawButton(){
-  const el = document.getElementById("gbtn");
-  if (!el || !S.gisReady) return;
-  const dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-  google.accounts.id.renderButton(el, {type:"standard", theme: dark ? "filled_black" : "outline", size:"large", text:"continue_with", shape:"pill", logo_alignment:"left", locale:"it", width: 280});
-}
-function onCredential(resp){
-  if (!resp || !resp.credential) return;
-  S.token = resp.credential; S.expired = false; S.err = null;
-  const c = claims(S.token) || {};
-  S.user = {name: c.given_name || c.name || "", picture: null};
-  save(); render(); load();
-}
-function logout(){
-  try { google.accounts.id.disableAutoSelect(); } catch(e){}
-  S.token = null; S.user = null; S.keywords = []; S.data = null; S.err = null; S.fetchedAt = null;
-  wipe(); render();
-}
-
-/* ---------- dati ---------- */
-let timer = null;
 async function load(){
-  if (!S.token) return;
-  if (!tokenValid()){ S.expired = true; render(); return; }
   S.loading = true; S.err = null; render();
   try {
-    const r = await fetch(CONFIG.endpoint, {method:"POST", headers:{"Content-Type":"application/json", "x-google-token": S.token}, body: JSON.stringify({keywords: S.keywords})});
+    const r = await fetch(ENDPOINT, {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({keywords:S.keywords})});
     const j = await r.json().catch(() => ({}));
-    if (r.status === 401){ S.expired = true; S.err = {t: j.message || "Accesso scaduto: rientra con Google."}; }
-    else if (!r.ok){ S.err = {t: j.message || "Il radar non risponde. Riprova tra poco.", retry: true}; }
-    else { S.data = j; S.fetchedAt = Date.now(); if (j.user && (j.user.given_name || j.user.name)) S.user = {name: j.user.given_name || j.user.name}; }
-  } catch(e){
-    S.err = {t: "Connessione non riuscita. Controlla la rete e riprova.", retry: true};
-  } finally {
-    S.loading = false; save(); render();
-    clearTimeout(timer); timer = setTimeout(() => { if (document.visibilityState === "visible") load(); }, 10*60*1000);
-  }
+    if (!r.ok) S.err = j.message || "Lo scraper non risponde. Riprova tra poco."; else S.data = j;
+  } catch(e){ S.err = "Connessione non riuscita. Riprova."; }
+  S.loading = false; save(); render();
 }
-
-function addKeyword(raw){
-  const v = String(raw || "").replace(/[^\p{L}\p{N} '’&#-]/gu, "").trim().toLowerCase().slice(0, 60);
+function add(raw){
+  const v = String(raw||"").replace(/[^\p{L}\p{N} '’&#-]/gu,"").trim().toLowerCase().slice(0,60);
   if (v.length < 2 || S.keywords.includes(v)) return false;
-  if (S.keywords.length >= CONFIG.maxKeywords){ S.err = {t: "Al massimo " + CONFIG.maxKeywords + " parole chiave."}; render(); return false; }
+  if (S.keywords.length >= MAXK){ S.err = "Al massimo " + MAXK + " parole."; render(); return false; }
   S.keywords.push(v); save(); return true;
 }
-
-/* ---------- vista ---------- */
-function header(){
-  return '<header class="bar">' + LOGO + '<span class="brand">Vetrina</span><span class="pill p-acc">Radar</span><span class="sp"></span>' +
-    (S.token && !S.expired ? '<span class="user">' + (S.user && S.user.name ? "Ciao " + esc(S.user.name) : "Connesso") + '</span><button type="button" class="btn btn-line btn-sm" data-act="logout">Esci e cancella</button>' : "") + '</header>';
-}
-function loginView(){
-  const btn = !CONFIG.clientId
-    ? '<div class="alert warn">' + I.alert + '<span class="grow">L\'accesso con Google non è ancora attivo su questa pagina. Riprova tra poco.</span></div>'
-    : '<div id="gbtn" style="min-height:44px"></div>';
-  return '<section class="card hero"><div class="tx"><p class="eyebrow">Ricerca di mercato per piccole attività</p><h1>Cosa sta crescendo adesso, nella tua nicchia.</h1>' +
-    '<p class="lead">Le ricerche di tendenza su Google in Italia, aggiornate ogni ora, e i video YouTube che stanno salendo sulle parole della tua attività.</p>' +
-    '<ul class="points">' +
-    '<li>' + I.check + '<span>Google Trends Italia, letto ogni ora</span></li>' +
-    '<li>' + I.check + '<span>Video YouTube delle ultime 72 ore, ordinati per viste all\'ora</span></li>' +
-    '<li>' + I.check + '<span>Nessun account da creare, nessun dato salvato</span></li></ul></div>' +
-    '<div class="login"><b style="font-size:17px">' + (S.expired ? "La sessione Google è scaduta" : "Entra per usare il radar") + '</b><small>' + (S.expired ? "Dura un'ora. Rientra: le tue parole chiave sono ancora qui." : "Ti chiediamo solo di accedere con Google per tenere fuori i robot.") + '</small>' + btn +
-    '<small>Le parole che scegli restano in questa scheda e spariscono quando la chiudi. <a href="privacy.html">Privacy</a></small></div></section>';
-}
-function kwCard(){
-  const chips = S.keywords.map((k,i) => '<span class="kwchip">' + esc(k) + '<button type="button" aria-label="Togli ' + esc(k) + '" data-act="kwdel" data-arg="' + i + '">' + I.x + '</button></span>').join("");
-  const full = S.keywords.length >= CONFIG.maxKeywords;
-  const sugg = S.keywords.length ? "" : '<div class="kw"><span class="note" style="margin:0">Idee:</span>' + SUGGEST.map(s => '<button type="button" class="sugg" data-act="sugg" data-arg="' + esc(s) + '">' + esc(s) + '</button>').join("") + '</div>';
-  return '<section class="card pad" style="display:flex;flex-direction:column;gap:12px" aria-label="Parole chiave"><div class="between"><div><h2 class="h2">Le parole della tua attività</h2><p class="note">Fino a ' + CONFIG.maxKeywords + '. Le usiamo per cercare i video YouTube che stanno crescendo.</p></div>' +
-    '<button type="button" class="btn btn-dark" data-act="load" ' + (S.loading ? "disabled" : "") + '>' + (S.loading ? '<span class="spin">' + I.refresh + '</span> Cerco…' : I.refresh + " Aggiorna il radar") + '</button></div>' +
-    '<div class="kw">' + (chips || '<span class="note" style="margin:0">Ancora nessuna parola.</span>') + '</div>' + sugg +
-    '<form class="kwf" id="kwf"><label class="sr" for="kwin">Nuova parola chiave</label><input id="kwin" maxlength="60" autocomplete="off" placeholder="' + (full ? "Hai già " + CONFIG.maxKeywords + " parole" : "Es. focaccia, torte per feste, pane senza glutine") + '" ' + (full ? "disabled" : "") + '><button class="btn btn-line" type="submit" ' + (full ? "disabled" : "") + '>Aggiungi</button></form></section>';
-}
-function kpis(d){
-  const t = d.trends || [], v = d.videos || [];
-  const hot = t.slice().sort((a,b) => (b.approx_traffic||0) - (a.approx_traffic||0))[0];
-  const fast = v[0];
-  return '<div class="row">' +
-    '<div class="card kpi"><span class="l">Tendenze su Google ora</span><span class="v">' + (t.length || "—") + '</span><span class="s">' + (d.trends_at ? "Italia · lettura delle " + hm(d.trends_at) : "in attesa della prima lettura") + '</span></div>' +
-    '<div class="card kpi"><span class="l">Ricerca più calda</span><span class="v" style="font-size:22px">' + (hot ? esc(hot.term) : "—") + '</span><span class="s">' + (hot && hot.approx_traffic ? fmtN(hot.approx_traffic) + "+ ricerche" : "") + '</span></div>' +
-    '<div class="card kpi"><span class="l">Video trovati, 72 h</span><span class="v">' + (v.length || "—") + '</span><span class="s">sulle tue parole</span></div>' +
-    '<div class="card kpi"><span class="l">Video più veloce</span><span class="v">' + (fast ? fmtN(fast.vph_recent != null ? fast.vph_recent : fast.vph) : "—") + '</span><span class="s">' + (fast ? "viste all'ora" : "aggiungi le tue parole") + '</span></div></div>';
+function kwCard(k){
+  const sug = k.suggestions.length ? '<div class="kw">' + k.suggestions.map(s => '<span class="kwchip" style="padding:6px 12px;font-weight:500">' + esc(s) + '</span>').join("") + '</div>' : '<p class="note">Nessun suggerimento trovato.</p>';
+  const news = k.news.length ? '<div style="display:flex;flex-direction:column;gap:10px">' + k.news.map(n => { const u = safe(n.url); return '<div><a href="' + esc(u||"#") + '" target="_blank" rel="noopener" style="font-weight:600;color:var(--fg);text-decoration:none">' + esc(n.title) + '</a><div class="note" style="margin:2px 0 0">' + esc(n.source||"") + (n.published_at ? " · " + ago(n.published_at) : "") + '</div></div>'; }).join("") + '</div>' + (k.news[0] && k.news[0].fresh === false ? '<p class="note">Nessuna notizia negli ultimi 7 giorni: queste sono le più recenti del mese.</p>' : "") : '<p class="note">Nessuna notizia recente su questa parola.</p>';
+  const vids = k.videos && k.videos.length ? '<h3 class="h2" style="font-size:16px">Video YouTube in crescita</h3><div style="display:flex;flex-direction:column;gap:8px">' + k.videos.map(v => '<div><a href="https://www.youtube.com/watch?v=' + encodeURIComponent(v.video_id) + '" target="_blank" rel="noopener" style="font-weight:600;color:var(--fg);text-decoration:none">' + esc(v.title) + '</a><div class="note" style="margin:2px 0 0">' + esc(v.channel||"") + " · " + fmt(v.vph_recent != null ? v.vph_recent : v.vph) + ' viste/ora</div></div>').join("") + '</div>' : "";
+  return '<section class="card pad" style="display:flex;flex-direction:column;gap:14px"><h2 class="h2" style="font-size:24px;font-weight:700">' + esc(k.keyword) + '</h2>' +
+    '<div><h3 class="h2" style="font-size:16px;margin-bottom:8px">Cosa cercano le persone su Google</h3>' + sug + '</div>' +
+    '<div><h3 class="h2" style="font-size:16px;margin-bottom:8px">Notizie</h3>' + news + '</div>' + vids + '</section>';
 }
 function trendsCard(d){
-  const t = d.trends || [];
-  if (!t.length) return '<section class="card pad"><h2 class="h2">Cosa cerca l\'Italia adesso</h2><div class="empty" style="margin-top:12px">Il radar non ha ancora letto Google. La prossima lettura è alle ' + hm(nextRun()) + '.</div></section>';
-  const multi = (d.snapshots_24h || 0) > 1;
-  const rows = t.map(x => {
-    const news = (x.news || []).slice(0,2).map(n => { const u = safeUrl(n.url); return u ? '<a href="' + esc(u) + '" target="_blank" rel="noopener">' + esc(n.title) + (n.source ? " · " + esc(n.source) : "") + '</a>' : '<span>' + esc(n.title) + '</span>'; }).join("");
-    const isNew = multi && x.first_seen && (Date.now() - new Date(x.first_seen)) < 70*60000;
-    const ranks = (x.ranks || []).map(r => -r);
-    return '<tr><td style="font-weight:700;color:var(--muted-2)">' + x.rank + '</td><td><span class="term">' + esc(x.term) + '</span>' + (isNew ? ' <span class="pill p-acc">nuova</span>' : "") + '<div class="news">' + news + '</div></td>' +
-      '<td class="num"><b>' + (x.approx_traffic ? fmtN(x.approx_traffic) + "+" : "—") + '</b></td><td style="white-space:nowrap;color:var(--muted)">' + (x.started_at ? since(x.started_at) : "—") + '</td><td>' + (ranks.length > 1 ? spark(ranks) : '<span class="note" style="margin:0">—</span>') + '</td></tr>';
-  }).join("");
-  return '<section class="card pad" style="display:flex;flex-direction:column;gap:12px" aria-label="Google Trends"><div><h2 class="h2">Cosa cerca l\'Italia adesso</h2><p class="note">Ricerche di tendenza su Google, tutte le categorie. Lettura delle ' + hm(d.trends_at) + ', la prossima alle ' + hm(nextRun()) + '. Usale per agganciarti a ciò di cui si parla oggi; evita tragedie e cronaca.</p></div>' +
-    '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>#</th><th>Ricerca</th><th style="text-align:right">Ricerche</th><th>In tendenza</th><th>Posizione 24 h</th></tr></thead><tbody>' + rows + '</tbody></table></div></section>';
-}
-function ytCard(d){
-  const v = d.videos || [], k = (d.keywords || []).filter(x => x.keyword);
-  const yt = d.youtube || {};
-  let head = '<div><h2 class="h2">Video in crescita sulle tue parole</h2><p class="note">YouTube, ultime 72 ore, ordinati per viste all\'ora. Le parole nuove si cercano subito, poi ogni 3 ore.</p></div>';
-  let notes = yt.note ? '<div class="alert warn">' + I.alert + '<span class="grow">' + esc(yt.note) + '</span></div>' : "";
-  if (!S.keywords.length) return '<section class="card pad" style="display:flex;flex-direction:column;gap:12px">' + head + '<div class="empty">Aggiungi almeno una parola della tua attività qui sopra e premi Aggiorna il radar.</div></section>';
-  if (!yt.enabled) return '<section class="card pad" style="display:flex;flex-direction:column;gap:12px">' + head + notes + '</section>';
-  const max = Math.max(1, ...k.map(x => +x.vph || 0));
-  const bars = k.map(x => '<div><div class="t"><span>' + esc(x.keyword) + ' <span style="color:var(--muted-2)">· ' + x.videos + ' video</span></span><b>' + fmtN(x.vph) + ' viste/ora</b></div><div class="tr"><span style="width:' + Math.max(2, Math.round((+x.vph||0)/max*100)) + '%"></span></div></div>').join("");
-  const rows = v.map(x => {
-    const vph = x.vph_recent != null ? x.vph_recent : x.vph;
-    const short = x.duration_s != null && x.duration_s <= 180;
-    return '<tr><td><div class="vt"><span class="vthumb">' + I.play + '</span><span><a href="https://www.youtube.com/watch?v=' + encodeURIComponent(x.video_id) + '" target="_blank" rel="noopener">' + esc(x.title) + '</a><small>' + esc(x.channel || "") + " · " + esc(x.keyword) + (short ? " · breve" : "") + '</small></span></div></td>' +
-      '<td style="white-space:nowrap;color:var(--muted)">' + ago(x.published_at) + '</td><td class="num">' + fmtN(x.views) + '</td><td class="num"><b>' + fmtN(vph) + '</b></td><td>' + (x.views_hist && x.views_hist.length > 1 ? spark(x.views_hist) : '<span class="note" style="margin:0">—</span>') + '</td></tr>';
-  }).join("");
-  return '<section class="card pad" style="display:flex;flex-direction:column;gap:14px" aria-label="YouTube">' + head + notes + (k.length ? '<div class="bars">' + bars + '</div>' : "") +
-    (v.length ? '<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Video</th><th>Pubblicato</th><th style="text-align:right">Viste</th><th style="text-align:right">Viste/ora</th><th>Andamento</th></tr></thead><tbody>' + rows + '</tbody></table></div>' : '<div class="empty">Nessun video nelle ultime 72 ore su queste parole. Prova parole più comuni.</div>') + '</section>';
-}
-function foot(){
-  return '<p class="foot">Fonti: Google Trends (ricerche di tendenza in Italia) e YouTube Data API. Instagram e TikTok non rendono pubblici i loro dati di tendenza. Non creiamo account e non salviamo chi sei: il token di Google viene controllato a ogni richiesta e poi scartato. Le parole cercate entrano solo in una cache anonima dei video, cancellata dopo pochi giorni. <a href="privacy.html">Privacy</a> · Un progetto di Palieri Investment srl.</p>';
+  const t = d.trends || []; if (!t.length) return "";
+  return '<section class="card pad" style="display:flex;flex-direction:column;gap:10px"><div><h2 class="h2">Cosa cerca l\'Italia adesso</h2><p class="note">Tendenze Google, lettura delle ' + hm(d.trends_at) + '. Si aggiornano ogni ora.</p></div><div class="tbl-wrap"><table class="tbl" style="min-width:420px"><tbody>' +
+    t.map(x => '<tr><td style="width:28px;color:var(--muted-2);font-weight:700">' + x.rank + '</td><td><span class="term">' + esc(x.term) + '</span>' + ((x.news||[])[0] ? '<div class="news"><span>' + esc(x.news[0].title) + '</span></div>' : "") + '</td><td class="num"><b>' + (x.approx_traffic ? fmt(x.approx_traffic) + "+" : "—") + '</b></td></tr>').join("") + '</tbody></table></div></section>';
 }
 function render(){
-  const app = document.getElementById("app");
-  let body;
-  if (!S.token || S.expired) body = loginView();
-  else {
-    const err = S.err ? '<div class="alert ' + (S.err.retry ? "warn" : "bad") + '">' + I.alert + '<span class="grow">' + esc(S.err.t) + '</span>' + (S.err.retry ? '<button type="button" class="btn btn-line btn-sm" data-act="load">Riprova</button>' : "") + '</div>' : "";
-    const status = S.data ? '<div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 16px;flex-wrap:wrap"><span class="pulse"></span><span style="flex:1;font-size:14px"><b>Radar attivo.</b> Google letto alle ' + hm(S.data.trends_at) + ' · prossima lettura alle ' + hm(nextRun()) + (S.fetchedAt ? ' · pagina aggiornata ' + ago(S.fetchedAt) : "") + '</span></div>' : "";
-    body = err + kwCard() + (S.data ? status + kpis(S.data) + trendsCard(S.data) + ytCard(S.data) : (S.loading ? '<div class="card pad"><p class="note" style="margin:0">Leggo il radar…</p></div>' : ""));
-  }
-  const active = document.activeElement && document.activeElement.id;
-  app.innerHTML = header() + body + foot();
-  if (!S.token || S.expired) drawButton();
-  if (active){ const el = document.getElementById(active); if (el) el.focus(); }
+  const chips = S.keywords.map((k,i) => '<span class="kwchip">' + esc(k) + '<button type="button" aria-label="Togli ' + esc(k) + '" data-act="del" data-arg="' + i + '">' + X + '</button></span>').join("");
+  const sugg = S.keywords.length ? "" : '<div class="kw"><span class="note" style="margin:0">Prova:</span>' + SUGGEST.map(s => '<button type="button" class="sugg" data-act="sugg" data-arg="' + esc(s) + '">' + esc(s) + '</button>').join("") + '</div>';
+  const full = S.keywords.length >= MAXK;
+  let html = '<header class="bar">' + LOGO + '<span class="brand">Vetrina</span><span class="pill p-acc">Scraper</span></header>' +
+    '<section class="card hero" style="padding:clamp(20px,4vw,36px)"><div class="tx"><p class="eyebrow">Ricerca di mercato per piccole attività</p><h1>Cosa cercano i tuoi clienti, adesso.</h1><p class="lead">Scrivi fino a 5 parole della tua attività: ti mostro cosa cercano le persone su Google, le notizie recenti e le tendenze in Italia. Nessuna registrazione.</p></div></section>' +
+    '<section class="card pad" style="display:flex;flex-direction:column;gap:12px"><div class="kw">' + (chips || '<span class="note" style="margin:0">Ancora nessuna parola.</span>') + '</div>' + sugg +
+    '<form class="kwf" id="kwf"><label class="sr" for="kwin">Parola chiave</label><input id="kwin" maxlength="60" autocomplete="off" placeholder="' + (full ? "Hai già 5 parole" : "Es. torte per feste, appartamenti foggia") + '" ' + (full?"disabled":"") + '><button class="btn btn-line" type="submit" ' + (full?"disabled":"") + '>Aggiungi</button><button class="btn btn-dark" type="button" data-act="go" ' + (S.loading||!S.keywords.length?"disabled":"") + '>' + (S.loading ? "Cerco…" : "Cerca") + '</button></form>' +
+    (S.err ? '<div class="alert warn"><span class="grow">' + esc(S.err) + '</span></div>' : "") + '</section>';
+  if (S.data) html += (S.data.keywords||[]).map(kwCard).join("") + trendsCard(S.data);
+  html += '<p class="foot">Fonti: suggerimenti di ricerca Google, Google News e Bing News, Google Trends Italia. Le parole restano solo in questa scheda del browser e spariscono quando la chiudi. Un progetto di Palieri Investment srl.</p>';
+  const a = document.activeElement && document.activeElement.id;
+  document.getElementById("app").innerHTML = html;
+  if (a){ const el = document.getElementById(a); if (el) el.focus(); }
 }
-
-/* ---------- eventi ---------- */
 document.addEventListener("click", e => {
   const el = e.target.closest("[data-act]"); if (!el) return;
-  const a = el.dataset.act, arg = el.dataset.arg;
-  if (a === "logout") logout();
-  if (a === "load") load();
-  if (a === "kwdel"){ S.keywords.splice(+arg, 1); save(); render(); }
-  if (a === "sugg"){ if (addKeyword(arg)){ render(); load(); } }
+  const a = el.dataset.act;
+  if (a === "del"){ S.keywords.splice(+el.dataset.arg,1); save(); render(); }
+  if (a === "sugg" && add(el.dataset.arg)){ render(); load(); }
+  if (a === "go") load();
 });
 document.addEventListener("submit", e => {
-  if (e.target.id !== "kwf") return;
-  e.preventDefault();
+  if (e.target.id !== "kwf") return; e.preventDefault();
   const inp = document.getElementById("kwin");
-  if (addKeyword(inp.value)){ S.err = null; render(); load(); }
-  const again = document.getElementById("kwin"); if (again){ again.value = ""; again.focus(); }
+  if (add(inp.value)){ S.err = null; render(); load(); }
 });
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && S.token && S.fetchedAt && Date.now() - S.fetchedAt > 10*60*1000) load(); });
-
-restore();
-if (S.token && !tokenValid()) S.expired = true;
 render();
-initGoogle();
-if (S.token && !S.expired) load();
-setInterval(() => { if (S.token && !S.expired && !S.loading) render(); }, 60000);
 })();
 </script>
 </body>
