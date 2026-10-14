@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Vetrina Radar</title>
-<meta name="description" content="Cosa cercano gli italiani adesso e quali video crescono nella tua nicchia. Accesso con Google, nessun dato salvato.">
+<meta name="description" content="Cosa cercano gli italiani adesso e quali video crescono nella tua nicchia. Nessuna registrazione, nessun dato salvato.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;500;600;700&display=swap">
@@ -118,6 +118,25 @@ form.kwf input{flex:1 1 240px;min-width:0;height:44px;border:1px solid var(--lin
 .points{margin:16px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px;font-size:15px;color:var(--fg-2)}
 .points li{display:flex;gap:10px;align-items:flex-start}
 .points svg{flex:none;margin-top:3px;color:var(--accent-ink)}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:14px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.kp{background:var(--surface-2);border:1px solid var(--line-soft);border-radius:12px;padding:12px 14px}
+.kp .l{font-size:12px;color:var(--muted)}.kp .v{font-family:var(--f-display);font-size:24px;font-weight:700;line-height:1.2}
+.up{color:var(--good-ink)}.down{color:var(--bad-ink)}
+.chart svg{display:block;width:100%;height:auto;overflow:visible}
+.chart text{fill:var(--muted-2);font-size:11px;font-family:var(--f-body)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap}
+.tab{padding:6px 12px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:13px;font-weight:600;cursor:pointer;min-height:34px}
+.tab[aria-pressed=true]{background:var(--ink);color:var(--ink-fg);border-color:var(--ink)}
+.qlist{display:flex;flex-wrap:wrap;gap:6px}
+.q{padding:6px 11px;border-radius:999px;background:var(--sunken);font-size:13px}
+.idea{border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;background:var(--surface-2)}
+.idea b{font-size:15px}.idea .meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.hl{background:var(--accent-tint)}
+.p-good{background:var(--good-tint);color:var(--good-ink)}.p-info{background:var(--info-tint);color:var(--info-ink)}
+details summary{cursor:pointer;font-weight:600;font-size:14px}
 </style>
 </head>
 <body>
@@ -126,19 +145,77 @@ form.kwf input{flex:1 1 240px;min-width:0;height:44px;border:1px solid var(--lin
 (function(){
 "use strict";
 const ENDPOINT = "https://hlouydfsefgvzxdqgvbj.supabase.co/functions/v1/radar-scrape";
-const MAXK = 5, KEY = "vetrina-scraper";
-const SUGGEST = ["panificio","pasticceria","ristorante","pizzeria","parrucchiere","estetista","palestra","agenzia immobiliare","bar caffetteria","fioraio"];
-const S = {keywords:[], data:null, loading:false, err:null};
+const MAXK = 5, KEY = "vetrina-scraper-v2";
+const SUGGEST = ["ristrutturazione casa","appartamenti foggia","panificio","ristorante","parrucchiere","palestra","agenzia immobiliare","pizzeria"];
+const COL = ["#EB6834","#2A78D6","#1E9E6A","#8B5CF6","#C9A227"];
+const GROUPS = [["domande","Domande"],["acquisto","Prezzo e scelta"],["luogo","Dove"],["confronto","Confronti"],["idee","Altre ricerche"]];
+const S = {keywords:[], data:null, loading:false, err:null, tab:{}, copied:null};
 try { const o = JSON.parse(sessionStorage.getItem(KEY) || "null"); if (o){ S.keywords = o.keywords || []; S.data = o.data || null; } } catch(e){}
 const save = () => { try { sessionStorage.setItem(KEY, JSON.stringify({keywords:S.keywords, data:S.data})); } catch(e){} };
-const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const dec = s => String(s == null ? "" : s).replace(/&#(\d+);/g,(m,n)=>String.fromCodePoint(+n)).replace(/&#x([0-9a-f]+);/gi,(m,n)=>String.fromCodePoint(parseInt(n,16)));
+const esc = s => dec(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const safe = u => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : null; } catch(e){ return null; } };
 const nf = new Intl.NumberFormat("it-IT"), fmt = n => n == null ? "—" : nf.format(Math.round(n));
 const hm = d => { const x = new Date(d); return isNaN(+x) ? "—" : x.toLocaleTimeString("it-IT",{hour:"2-digit",minute:"2-digit"}); };
 const ago = d => { const x = new Date(d); if (isNaN(+x)) return ""; const m = Math.round((Date.now()-x)/60000); if (m < 60) return Math.max(m,1)+" min fa"; const h = Math.round(m/60); return h < 24 ? h+" h fa" : Math.round(h/24)+" g fa"; };
+const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 const LOGO = '<span class="logo"><svg width="21" height="21" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16l-1.6-4H5.6z" fill="#EB6834"/><path d="M4 9a2 2 0 0 0 4 0a2 2 0 0 0 4 0a2 2 0 0 0 4 0a2 2 0 0 0 4 0z" fill="#EB6834"/><rect x="6.5" y="13.5" width="11" height="6.5" rx="1" fill="none" stroke="#FFFFFF" stroke-width="1.6"/></svg></span>';
 const X = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 
+/* ---------- grafici SVG ---------- */
+function columns(days, color){
+  const W = 600, H = 150, P = 22, max = Math.max(1, ...days.map(d => d.n)), bw = (W - P) / days.length;
+  let g = '';
+  for (let i = 1; i <= 3; i++){ const y = H - 18 - (H - 30) * i / 3; g += '<line x1="'+P+'" x2="'+W+'" y1="'+y+'" y2="'+y+'" stroke="var(--line-soft)"/><text x="0" y="'+(y+4)+'">'+Math.round(max*i/3)+'</text>'; }
+  days.forEach((d, i) => { const h = (H - 30) * d.n / max, x = P + i * bw + 1.5, y = H - 18 - h;
+    g += '<rect x="'+x+'" y="'+y+'" width="'+Math.max(bw-3,2)+'" height="'+Math.max(h,d.n?2:0)+'" rx="2" fill="'+color+'" opacity="'+(i >= days.length-7 ? 1 : .45)+'"><title>'+d.d.split("-").reverse().slice(0,2).join("/")+': '+d.n+' notizie</title></rect>'; });
+  g += '<line x1="'+P+'" x2="'+W+'" y1="'+(H-18)+'" y2="'+(H-18)+'" stroke="var(--line-strong)"/>';
+  [0, 14, 29].forEach(i => { if (days[i]) g += '<text x="'+(P + i*bw + bw/2)+'" y="'+H+'" text-anchor="middle">'+days[i].d.split("-").reverse().slice(0,2).join("/")+'</text>'; });
+  return '<div class="chart"><svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Notizie al giorno negli ultimi 30 giorni">'+g+'</svg></div>';
+}
+function lines(series){
+  const W = 640, H = 190, P = 26, n = 30;
+  const max = Math.max(1, ...series.flatMap(s => s.vals));
+  const xs = i => P + (W - P - 6) * i / (n - 1), ys = v => H - 20 - (H - 34) * v / max;
+  let g = '';
+  for (let i = 1; i <= 3; i++){ const v = max*i/3, y = ys(v); g += '<line x1="'+P+'" x2="'+W+'" y1="'+y+'" y2="'+y+'" stroke="var(--line-soft)"/><text x="0" y="'+(y+4)+'">'+(v<10?v.toFixed(1):Math.round(v))+'</text>'; }
+  g += '<line x1="'+P+'" x2="'+W+'" y1="'+(H-20)+'" y2="'+(H-20)+'" stroke="var(--line-strong)"/>';
+  series.forEach(s => { g += '<polyline fill="none" stroke="'+s.c+'" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" points="'+s.vals.map((v,i)=>xs(i).toFixed(1)+','+ys(v).toFixed(1)).join(" ")+'"/>'; });
+  g += '<text x="'+P+'" y="'+H+'">30 giorni fa</text><text x="'+W+'" y="'+H+'" text-anchor="end">oggi</text>';
+  return '<div class="chart"><svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Confronto notizie al giorno, media mobile 3 giorni">'+g+'</svg></div>';
+}
+function hbars(items, color){
+  const max = Math.max(1, ...items.map(x => x.n));
+  return '<div class="bars">' + items.map(x => '<div><div class="t"><span>'+esc(x.label)+'</span><b>'+fmt(x.n)+'</b></div><div class="tr"><span style="width:'+Math.max(4, 100*x.n/max)+'%;background:'+color+'"></span></div></div>').join("") + '</div>';
+}
+function spark(ranks){
+  const W = 120, H = 30, n = ranks.length; if (!n) return "";
+  const pts = []; let seg = '';
+  ranks.forEach((r, i) => { const x = 2 + (W - 4) * i / (n - 1); if (r > 0){ const y = 3 + (H - 6) * (Math.min(r, 25) - 1) / 24; pts.push([x,y]); seg += (seg ? ' L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1); } else if (seg){ seg += ' '; } });
+  const path = seg.split(' M').length ? seg.replace(/ (?=\d)/g," ").replace(/  +/g," ") : seg;
+  const hours = ranks.filter(r => r > 0).length;
+  return '<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" aria-label="In classifica '+hours+' ore su 24"><line x1="0" x2="'+W+'" y1="'+(H-1)+'" y2="'+(H-1)+'" stroke="var(--line-soft)"/>' + pts.map(p => '<circle cx="'+p[0].toFixed(1)+'" cy="'+p[1].toFixed(1)+'" r="1.8" fill="var(--accent)"/>').join("") + '</svg>';
+}
+const ma3 = a => a.map((_, i) => { const w = a.slice(Math.max(0, i-2), i+1); return w.reduce((x,y)=>x+y,0)/w.length; });
+
+/* ---------- idee post ---------- */
+function ideas(k, trends){
+  const g = (k.questions && k.questions.groups) || {}, out = [], kw = k.keyword;
+  const q = (g.domande || [])[0], q2 = (g.domande || [])[1], a = (g.acquisto || [])[0], c = (g.confronto || [])[0], l = (g.luogo || [])[0];
+  if (q) out.push({f:"Reel 30\"", why:"Domanda vera cercata su Google", hook: cap(q) + "? Te lo spiego in 30 secondi.", body:"Apri con la domanda a schermo, rispondi in 3 punti pratici, chiudi con: scrivimi \"" + kw.split(" ")[0].toUpperCase() + "\" e ti mando i dettagli."});
+  if (a) out.push({f:"Carosello", why:"Intento d'acquisto: chi cerca questo sta per scegliere", hook: cap(a) + ": quello che nessuno ti dice.", body:"Slide 1 la domanda. Slide 2-5 le voci che fanno cambiare il prezzo o la scelta, con numeri reali tuoi. Ultima slide: chiedi un preventivo."});
+  if (c) out.push({f:"Carosello", why:"Le persone confrontano: posizionati tu", hook: cap(c) + "? Pro e contro, senza giri di parole.", body:"Tabella a due colonne, un criterio per slide, verdetto finale onesto e per chi va bene ciascuna opzione."});
+  if (l) out.push({f:"Post locale", why:"Ricerca con luogo: traffico vicino a te", hook: cap(l) + ": eccoci.", body:"Foto del posto o del lavoro finito, indirizzo, orari, un dettaglio che solo chi è della zona riconosce."});
+  if (q2) out.push({f:"Storia con sondaggio", why:"Seconda domanda più cercata", hook: cap(q2) + "?", body:"Sondaggio sì/no, poi rispondi nella storia dopo con la tua esperienza."});
+  const nw = (k.news || []).find(n => n.fresh);
+  if (nw) out.push({f:"Reel commento", why:"Notizia di " + ago(nw.published_at), hook:"Hai visto questa notizia? Ecco cosa cambia per chi cerca " + kw + ".", body:"Inquadra il titolo («" + nw.title.slice(0, 90) + "»), poi 2 conseguenze pratiche per il tuo cliente."});
+  const words = kw.split(" ").filter(w => w.length > 3);
+  const tr = (trends || []).find(t => words.some(w => t.term.toLowerCase().includes(w)));
+  if (tr) out.push({f:"Aggancio trend", why:"\"" + tr.term + "\" è tra le tendenze di oggi", hook: cap(tr.term) + ": e tu cosa ne pensi?", body:"Pubblica entro oggi, il trend dura poche ore."});
+  return out.slice(0, 6);
+}
+
+/* ---------- API ---------- */
 async function load(){
   S.loading = true; S.err = null; render();
   try {
@@ -154,30 +231,65 @@ function add(raw){
   if (S.keywords.length >= MAXK){ S.err = "Al massimo " + MAXK + " parole."; render(); return false; }
   S.keywords.push(v); save(); return true;
 }
-function kwCard(k){
-  const sug = k.suggestions.length ? '<div class="kw">' + k.suggestions.map(s => '<span class="kwchip" style="padding:6px 12px;font-weight:500">' + esc(s) + '</span>').join("") + '</div>' : '<p class="note">Nessun suggerimento trovato.</p>';
-  const news = k.news.length ? '<div style="display:flex;flex-direction:column;gap:10px">' + k.news.map(n => { const u = safe(n.url); return '<div><a href="' + esc(u||"#") + '" target="_blank" rel="noopener" style="font-weight:600;color:var(--fg);text-decoration:none">' + esc(n.title) + '</a><div class="note" style="margin:2px 0 0">' + esc(n.source||"") + (n.published_at ? " · " + ago(n.published_at) : "") + '</div></div>'; }).join("") + '</div>' + (k.news[0] && k.news[0].fresh === false ? '<p class="note">Nessuna notizia negli ultimi 7 giorni: queste sono le più recenti del mese.</p>' : "") : '<p class="note">Nessuna notizia recente su questa parola.</p>';
-  const vids = k.videos && k.videos.length ? '<h3 class="h2" style="font-size:16px">Video YouTube in crescita</h3><div style="display:flex;flex-direction:column;gap:8px">' + k.videos.map(v => '<div><a href="https://www.youtube.com/watch?v=' + encodeURIComponent(v.video_id) + '" target="_blank" rel="noopener" style="font-weight:600;color:var(--fg);text-decoration:none">' + esc(v.title) + '</a><div class="note" style="margin:2px 0 0">' + esc(v.channel||"") + " · " + fmt(v.vph_recent != null ? v.vph_recent : v.vph) + ' viste/ora</div></div>').join("") + '</div>' : "";
-  return '<section class="card pad" style="display:flex;flex-direction:column;gap:14px"><h2 class="h2" style="font-size:24px;font-weight:700">' + esc(k.keyword) + '</h2>' +
-    '<div><h3 class="h2" style="font-size:16px;margin-bottom:8px">Cosa cercano le persone su Google</h3>' + sug + '</div>' +
-    '<div><h3 class="h2" style="font-size:16px;margin-bottom:8px">Notizie</h3>' + news + '</div>' + vids + '</section>';
+
+/* ---------- viste ---------- */
+function delta(t){
+  if (!t) return '<span class="v">—</span>';
+  const d = t.prev7 ? Math.round(100 * (t.last7 - t.prev7) / t.prev7) : (t.last7 ? 100 : 0);
+  const cls = d > 0 ? "up" : d < 0 ? "down" : "";
+  return '<span class="v">' + t.last7 + '</span> <b class="' + cls + '" style="font-size:13px">' + (d > 0 ? "+" : "") + d + '% vs sett. prima</b>';
+}
+function kwCard(k, i, trends){
+  const c = COL[i % COL.length], Q = k.questions || {groups:{}, words:[], total:(k.suggestions||[]).length};
+  const tab = S.tab[k.keyword] || (GROUPS.find(g => (Q.groups[g[0]]||[]).length) || GROUPS[0])[0];
+  const tabs = '<div class="tabs" role="group" aria-label="Tipo di ricerca">' + GROUPS.map(g => { const n = (Q.groups[g[0]]||[]).length; return n ? '<button class="tab" data-act="tab" data-k="'+esc(k.keyword)+'" data-arg="'+g[0]+'" aria-pressed="'+(tab===g[0])+'">'+g[1]+' · '+n+'</button>' : ''; }).join("") + '</div>';
+  const list = (Q.groups[tab] || []);
+  const qs = list.length ? '<div class="qlist">' + list.map(s => '<span class="q">' + esc(s) + '</span>').join("") + '</div>' : '<p class="note">Nessuna ricerca trovata.</p>';
+  const words = (Q.words || []).length ? hbars(Q.words.map(w => ({label:w.w, n:w.n})), c) : '<p class="note">Troppe poche ricerche per trovare parole ricorrenti.</p>';
+  const tl = k.timeline;
+  const news = k.news.length ? '<div style="display:flex;flex-direction:column;gap:10px">' + k.news.slice(0,4).map(n => { const u = safe(n.url); return '<div><a href="' + esc(u||"#") + '" target="_blank" rel="noopener" style="font-weight:600;color:var(--fg);text-decoration:none">' + esc(n.title) + '</a><div class="note" style="margin:2px 0 0">' + esc(n.source||"") + (n.published_at ? " · " + ago(n.published_at) : "") + '</div></div>'; }).join("") + '</div>' : '<p class="note">Nessuna notizia recente.</p>';
+  const id = ideas(k, trends);
+  const ideasH = id.length ? '<div class="grid2">' + id.map((x, j) => { const txt = x.hook + "\n\n" + x.body; const key = k.keyword + "#" + j;
+    return '<div class="idea"><div class="meta"><span class="pill p-acc">' + esc(x.f) + '</span><span class="note" style="margin:0">' + esc(x.why) + '</span></div><b>' + esc(x.hook) + '</b><span style="font-size:14px;color:var(--muted)">' + esc(x.body) + '</span><div><button class="btn btn-line btn-sm" data-act="copy" data-arg="' + esc(txt) + '" data-key="' + esc(key) + '">' + (S.copied === key ? "Copiato" : "Copia") + '</button></div></div>'; }).join("") + '</div>' : '<p class="note">Servono più dati per proporre idee.</p>';
+  const vids = k.videos && k.videos.length ? '<div><h3 class="h2" style="font-size:16px;margin-bottom:8px">Video YouTube in crescita</h3>' + hbars(k.videos.map(v => ({label:v.title, n:v.vph_recent != null ? v.vph_recent : v.vph})), c) + '</div>' : "";
+  return '<section class="card pad" style="display:flex;flex-direction:column;gap:18px">' +
+    '<div class="between"><h2 class="h2" style="font-size:26px;font-weight:700"><i style="display:inline-block;width:12px;height:12px;border-radius:4px;background:'+c+';margin-right:10px"></i>' + esc(k.keyword) + '</h2></div>' +
+    '<div class="kpis"><div class="kp"><div class="l">Ricerche collegate trovate</div><span class="v">' + fmt(Q.total) + '</span></div><div class="kp"><div class="l">Notizie ultimi 7 giorni</div>' + delta(tl) + '</div><div class="kp"><div class="l">Fonte più attiva</div><span class="v" style="font-size:17px">' + esc(((k.sources||[])[0]||{}).s || "—") + '</span></div></div>' +
+    '<div><h3 class="h2" style="font-size:18px">① Mappa delle domande</h3><p class="note" style="margin:2px 0 10px">Cosa scrivono davvero le persone su Google, diviso per intenzione.</p>' + tabs + '<div style="margin-top:10px">' + qs + '</div></div>' +
+    '<div class="grid2"><div><h3 class="h2" style="font-size:16px;margin-bottom:10px">Parole che tornano più spesso</h3>' + words + '</div>' +
+    '<div><h3 class="h2" style="font-size:16px">② Termometro dell\'attenzione</h3><p class="note" style="margin:2px 0 8px">Notizie al giorno, ultimi 30 giorni. Barre piene: ultima settimana.</p>' + (tl ? columns(tl.days, c) : '<p class="note">Dati non disponibili.</p>') + '</div></div>' +
+    '<div><h3 class="h2" style="font-size:18px">③ Idee post pronte</h3><p class="note" style="margin:2px 0 10px">Costruite sulle ricerche e notizie qui sopra. Copia, adatta, pubblica.</p>' + ideasH + '</div>' +
+    '<details><summary>Ultime notizie (' + k.news.length + ')</summary><div style="margin-top:10px">' + news + '</div></details>' + vids + '</section>';
+}
+function compareCard(ks){
+  if (ks.length < 2) return "";
+  const series = ks.map((k, i) => ({c:COL[i % COL.length], name:k.keyword, vals: ma3(((k.timeline||{}).days||[]).map(d => d.n))})).filter(s => s.vals.length);
+  const leg = '<div class="legend">' + ks.map((k,i) => '<span><i style="background:'+COL[i%COL.length]+'"></i>'+esc(k.keyword)+'</span>').join("") + '</div>';
+  const vol = ks.map((k,i) => '<div><div class="t"><span>'+esc(k.keyword)+'</span><b>'+fmt((k.questions||{}).total)+'</b></div><div class="tr"><span style="width:'+Math.max(4,100*((k.questions||{}).total||0)/Math.max(1,...ks.map(x=>(x.questions||{}).total||0)))+'%;background:'+COL[i%COL.length]+'"></span></div></div>').join("");
+  return '<section class="card pad" style="display:flex;flex-direction:column;gap:14px"><div><h2 class="h2">Confronto tra le tue parole</h2><p class="note">Quale argomento sta scaldando di più, e quale ha più domande dietro.</p></div>' + leg +
+    '<div class="grid2"><div><h3 class="h2" style="font-size:15px;margin-bottom:6px">Notizie al giorno (media 3 giorni)</h3>' + (series.length ? lines(series) : "") + '</div><div><h3 class="h2" style="font-size:15px;margin-bottom:10px">Ricerche collegate su Google</h3><div class="bars">' + vol + '</div></div></div></section>';
 }
 function trendsCard(d){
   const t = d.trends || []; if (!t.length) return "";
-  return '<section class="card pad" style="display:flex;flex-direction:column;gap:10px"><div><h2 class="h2">Cosa cerca l\'Italia adesso</h2><p class="note">Tendenze Google, lettura delle ' + hm(d.trends_at) + '. Si aggiornano ogni ora.</p></div><div class="tbl-wrap"><table class="tbl" style="min-width:420px"><tbody>' +
-    t.map(x => '<tr><td style="width:28px;color:var(--muted-2);font-weight:700">' + x.rank + '</td><td><span class="term">' + esc(x.term) + '</span>' + ((x.news||[])[0] ? '<div class="news"><span>' + esc(x.news[0].title) + '</span></div>' : "") + '</td><td class="num"><b>' + (x.approx_traffic ? fmt(x.approx_traffic) + "+" : "—") + '</b></td></tr>').join("") + '</tbody></table></div></section>';
+  const words = S.keywords.flatMap(k => k.split(" ")).filter(w => w.length > 3);
+  const top = t.slice().sort((a,b) => (b.approx_traffic||0) - (a.approx_traffic||0)).slice(0, 8);
+  return '<section class="card pad" style="display:flex;flex-direction:column;gap:14px"><div><h2 class="h2">Cosa cerca l\'Italia adesso</h2><p class="note">Tendenze Google, lettura delle ' + hm(d.trends_at) + '. La linea mostra le ore in classifica nelle ultime 24.</p></div>' +
+    '<div class="grid2"><div><h3 class="h2" style="font-size:15px;margin-bottom:10px">Volume di ricerca stimato</h3>' + hbars(top.map(x => ({label:x.term, n:x.approx_traffic||0})), "var(--accent)") + '</div>' +
+    '<div class="tbl-wrap"><table class="tbl" style="min-width:420px"><thead><tr><th>#</th><th>Tendenza</th><th>Ultime 24 ore</th></tr></thead><tbody>' +
+    t.map(x => { const h = x.history, hours = h ? h.ranks.filter(r => r > 0).length : 0, isNew = h && hours <= 2, match = words.some(w => x.term.toLowerCase().includes(w));
+      return '<tr class="' + (match ? "hl" : "") + '"><td style="width:28px;color:var(--muted-2);font-weight:700">' + x.rank + '</td><td><span class="term">' + esc(x.term) + '</span> ' + (isNew ? '<span class="pill p-good">nuovo</span>' : '') + (match ? ' <span class="pill p-acc">tocca le tue parole</span>' : '') + ((x.news||[])[0] ? '<div class="news"><span>' + esc(x.news[0].title) + '</span></div>' : "") + '</td><td>' + (h ? spark(h.ranks) + '<div class="note" style="margin:0">' + hours + ' ore su 24</div>' : '—') + '</td></tr>'; }).join("") + '</tbody></table></div></div></section>';
 }
 function render(){
-  const chips = S.keywords.map((k,i) => '<span class="kwchip">' + esc(k) + '<button type="button" aria-label="Togli ' + esc(k) + '" data-act="del" data-arg="' + i + '">' + X + '</button></span>').join("");
+  const chips = S.keywords.map((k,i) => '<span class="kwchip"><i style="display:inline-block;width:9px;height:9px;border-radius:3px;background:'+COL[i%COL.length]+'"></i>' + esc(k) + '<button type="button" aria-label="Togli ' + esc(k) + '" data-act="del" data-arg="' + i + '">' + X + '</button></span>').join("");
   const sugg = S.keywords.length ? "" : '<div class="kw"><span class="note" style="margin:0">Prova:</span>' + SUGGEST.map(s => '<button type="button" class="sugg" data-act="sugg" data-arg="' + esc(s) + '">' + esc(s) + '</button>').join("") + '</div>';
   const full = S.keywords.length >= MAXK;
-  let html = '<header class="bar">' + LOGO + '<span class="brand">Vetrina</span><span class="pill p-acc">Scraper</span></header>' +
-    '<section class="card hero" style="padding:clamp(20px,4vw,36px)"><div class="tx"><p class="eyebrow">Ricerca di mercato per piccole attività</p><h1>Cosa cercano i tuoi clienti, adesso.</h1><p class="lead">Scrivi fino a 5 parole della tua attività: ti mostro cosa cercano le persone su Google, le notizie recenti e le tendenze in Italia. Nessuna registrazione.</p></div></section>' +
+  let html = '<header class="bar">' + LOGO + '<span class="brand">Vetrina</span><span class="pill p-acc">Radar</span></header>' +
+    '<section class="card hero" style="padding:clamp(20px,4vw,36px)"><div class="tx"><p class="eyebrow">Ricerca di mercato in tempo reale</p><h1>Cosa cercano le persone, adesso.</h1><p class="lead">Fino a 5 parole: ottieni la mappa delle domande su Google, l\'andamento delle notizie a 30 giorni, il confronto tra argomenti e idee post pronte.</p></div></section>' +
     '<section class="card pad" style="display:flex;flex-direction:column;gap:12px"><div class="kw">' + (chips || '<span class="note" style="margin:0">Ancora nessuna parola.</span>') + '</div>' + sugg +
-    '<form class="kwf" id="kwf"><label class="sr" for="kwin">Parola chiave</label><input id="kwin" maxlength="60" autocomplete="off" placeholder="' + (full ? "Hai già 5 parole" : "Es. torte per feste, appartamenti foggia") + '" ' + (full?"disabled":"") + '><button class="btn btn-line" type="submit" ' + (full?"disabled":"") + '>Aggiungi</button><button class="btn btn-dark" type="button" data-act="go" ' + (S.loading||!S.keywords.length?"disabled":"") + '>' + (S.loading ? "Cerco…" : "Cerca") + '</button></form>' +
+    '<form class="kwf" id="kwf"><label class="sr" for="kwin">Parola chiave</label><input id="kwin" maxlength="60" autocomplete="off" placeholder="' + (full ? "Hai già 5 parole" : "Es. bilocale foggia, cappotto termico") + '" ' + (full?"disabled":"") + '><button class="btn btn-line" type="submit" ' + (full?"disabled":"") + '>Aggiungi</button><button class="btn btn-dark" type="button" data-act="go" ' + (S.loading||!S.keywords.length?"disabled":"") + '>' + (S.loading ? "Cerco… (fino a 20 s)" : "Cerca") + '</button></form>' +
     (S.err ? '<div class="alert warn"><span class="grow">' + esc(S.err) + '</span></div>' : "") + '</section>';
-  if (S.data) html += (S.data.keywords||[]).map(kwCard).join("") + trendsCard(S.data);
-  html += '<p class="foot">Fonti: suggerimenti di ricerca Google, Google News e Bing News, Google Trends Italia. Le parole restano solo in questa scheda del browser e spariscono quando la chiudi. Un progetto di Palieri Investment srl.</p>';
+  if (S.data){ const ks = S.data.keywords || []; html += compareCard(ks) + ks.map((k,i) => kwCard(k, i, S.data.trends)).join("") + trendsCard(S.data); }
+  html += '<p class="foot">Fonti: suggerimenti di ricerca Google, Google News e Bing News, Google Trends Italia (letto ogni ora). Le idee post sono generate da modelli fissi sui dati trovati, non da un\'AI. Le parole restano solo in questa scheda del browser. <a href="privacy.html">Privacy</a> · Palieri Investment srl.</p>';
   const a = document.activeElement && document.activeElement.id;
   document.getElementById("app").innerHTML = html;
   if (a){ const el = document.getElementById(a); if (el) el.focus(); }
@@ -188,6 +300,8 @@ document.addEventListener("click", e => {
   if (a === "del"){ S.keywords.splice(+el.dataset.arg,1); save(); render(); }
   if (a === "sugg" && add(el.dataset.arg)){ render(); load(); }
   if (a === "go") load();
+  if (a === "tab"){ S.tab[el.dataset.k] = el.dataset.arg; render(); }
+  if (a === "copy"){ const t = el.dataset.arg, k = el.dataset.key; (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => { S.copied = k; render(); setTimeout(() => { S.copied = null; render(); }, 1500); }).catch(() => {}); }
 });
 document.addEventListener("submit", e => {
   if (e.target.id !== "kwf") return; e.preventDefault();
